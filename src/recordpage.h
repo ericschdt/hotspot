@@ -52,6 +52,13 @@ enum RecordType
 };
 Q_DECLARE_METATYPE(RecordType)
 
+enum OutputDecoder
+{
+    Default,
+    RemoveAnsi,
+    DecodeAnsi
+};
+
 class RecordPage : public QWidget
 {
     Q_OBJECT
@@ -99,6 +106,7 @@ private:
     QString m_resultsFile;
     QElapsedTimer m_recordTimer;
     QTimer* m_updateRuntimeTimer;
+    OutputDecoder m_outputDecoder;
 
     ProcessModel* m_processModel;
     ProcessFilterModel* m_processProxyModel;

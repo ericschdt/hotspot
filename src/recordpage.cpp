@@ -175,6 +175,7 @@ RecordPage::RecordPage(QWidget* parent)
     , ui(new Ui::RecordPage)
     , m_perfRecord(new PerfRecord(this))
     , m_updateRuntimeTimer(new QTimer(this))
+    , m_outputDecoder(Default)
     , m_watcher(new QFutureWatcher<ProcDataList>(this))
 {
     {
@@ -439,6 +440,15 @@ RecordPage::RecordPage(QWidget* parent)
         if (index != -1)
             ui->compressionComboBox->setCurrentIndex(index);
     }
+
+    ui->outputDecoderComboBox->addItem(tr("Default"), Default);
+    ui->outputDecoderComboBox->addItem(tr("Remove Ansi"), RemoveAnsi);
+    ui->outputDecoderComboBox->addItem(tr("Decode Ansi (might break formatting)"), DecodeAnsi);
+
+    connect(ui->outputDecoderComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int currentIndex) {
+                m_outputDecoder = static_cast<OutputDecoder>(ui->outputDecoderComboBox->itemData(currentIndex).toInt());
+            });
 }
 
 RecordPage::~RecordPage() = default;
@@ -809,61 +819,74 @@ void RecordPage::appendOutput(const QString& text)
     QTextCursor cursor(ui->perfResultsTextEdit->document());
     cursor.movePosition(QTextCursor::End);
 
-    auto ansiToHtml = [](QStringList numbers) -> QString {
-        static bool openTag = false;
+    auto ansiToHtml = [](const QStringList& numbers) -> QString {
+        static bool openColor = false;
         // only foregroud colors are supported currently
         const QHash<int, QColor> colors = {
             {30, Qt::black},       {31, Qt::darkRed},  {32, Qt::darkGreen}, {33, Qt::darkYellow}, {34, Qt::darkBlue},
             {35, Qt::darkMagenta}, {36, Qt::darkCyan}, {37, Qt::darkGray},  {91, Qt::red},        {92, Qt::green},
             {93, Qt::yellow},      {94, Qt::blue},     {95, Qt::magenta},   {96, Qt::cyan},       {37, Qt::white}};
 
+        QString tag;
         for (const auto& number : numbers) {
             bool ok;
             int num = number.toInt(&ok);
 
             if (ok) {
                 if (num == 0) {
-                    if (openTag) {
-                        openTag = false;
-                        return QLatin1String("</font>");
-                    } else {
-                        return QLatin1String();
+                    if (openColor) {
+                        openColor = false;
+                        tag += QLatin1String("</font>");
                     }
                 } else if (colors.contains(num)) {
-                    QString tag;
-
-                    if (openTag) {
+                    if (openColor) {
                         tag += QLatin1String("</font>");
                     }
 
                     tag += QStringLiteral("<font color=\"%1\">").arg(colors[num].name());
-                    openTag = true;
+                    openColor = true;
                     return tag;
                 }
             }
         }
-        return QLatin1String();
+        return tag;
     };
 
-    auto matches = regex.globalMatch(text);
-    if (matches.hasNext()) {
-        QString colorText;
-        auto textList = text.split(regex);
-        while (matches.hasNext()) {
-            auto match = matches.next();
-
-            if (textList.length() > 1) {
-                // html eats up spaces, replaces them to keep the formating
-                colorText += textList.front().replace(QLatin1String(" "), QLatin1String("&nbsp;"))
-                    + ansiToHtml(match.captured(1).split(QLatin1String(";")));
-                textList.pop_front();
-            }
-        }
-        colorText += textList.front().replace(QLatin1String(" "), QLatin1String("&nbsp;"));
-        // newline don't work in html
-        cursor.insertHtml(colorText.replace(QLatin1String("\n"), QLatin1String("<br>")));
-    } else {
+    switch (m_outputDecoder) {
+    case Default:
         cursor.insertText(text);
+        break;
+    case RemoveAnsi: {
+        QString cleanOutput = text;
+        cursor.insertText(cleanOutput.replace(regex, QLatin1String("")));
+        break;
+    }
+    case DecodeAnsi: {
+        // html eats up spaces, replaces them to keep the formating
+        QString text_ = text;
+        text_.replace(QLatin1String(" "), QLatin1String("&nbsp;"));
+        QString colorText;
+        auto matches = regex.globalMatch(text_);
+        if (matches.hasNext()) {
+            auto textList = text_.split(regex);
+            while (matches.hasNext()) {
+                auto match = matches.next();
+
+                if (textList.length() > 1) {
+                    colorText += textList.front() + ansiToHtml(match.captured(1).split(QLatin1String(";")));
+                    textList.pop_front();
+                }
+            }
+            colorText += textList.front();
+        } else {
+            colorText = text_;
+        }
+        // newline don't work in html
+        colorText = colorText.replace(QLatin1String("\n"), QLatin1String("<br>"));
+        qDebug() << colorText;
+        cursor.insertHtml(colorText);
+        break;
+    }
     }
 }
 
